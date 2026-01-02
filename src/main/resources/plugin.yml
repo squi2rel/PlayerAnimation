@@ -1,0 +1,22 @@
+name: PlayerAnimation
+version: '1.0'
+main: com.github.squi2rel.playerAnimation.PlayerAnimation
+api-version: '1.21.4'
+authors: [ squi2rel ]
+description: magic
+website: github.com/squi2rel
+depend: [ Vivecraft-Spigot-Extensions, voicechat, ProtocolLib ]
+
+commands:
+  playmmd:
+    permissions: playeranimation.mmd
+  stopmmd:
+    permissions: playeranimation.mmd
+  linkvr:
+    permissions: playeranimation.link
+  unlinkvr:
+    permissions: playeranimation.link
+  linkedvr:
+    permissions: playeranimation.link
+  createpiece:
+    permissions: playeranimation.piece
