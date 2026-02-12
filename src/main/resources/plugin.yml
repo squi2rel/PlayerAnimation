@@ -5,12 +5,12 @@ api-version: '1.21.4'
 authors: [ squi2rel ]
 description: magic
 website: github.com/squi2rel
-depend: [ Vivecraft-Spigot-Extensions, voicechat, ProtocolLib ]
+depend: [ Vivecraft-Spigot-Extension, voicechat, ProtocolLib ]
 
 commands:
-  playmmd:
+  mmdplay:
     permissions: playeranimation.mmd
-  stopmmd:
+  mmdstop:
     permissions: playeranimation.mmd
   linkvr:
     permissions: playeranimation.link
@@ -18,5 +18,3 @@ commands:
     permissions: playeranimation.link
   linkedvr:
     permissions: playeranimation.link
-  createpiece:
-    permissions: playeranimation.piece

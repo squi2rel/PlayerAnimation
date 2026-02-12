@@ -27,11 +27,11 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
+import org.joml.Quaternionf;
 import org.joml.Quaternionfc;
-import org.vivecraft.spigot.network.Pose;
-import org.vivecraft.spigot.network.VrPlayerState;
-import org.vivecraft.utils.Quaternion;
-import org.vivecraft.utils.Vector3;
+import org.joml.Vector3f;
+import org.vivecraft.data.Pose;
+import org.vivecraft.data.VrPlayerState;
 
 import java.util.*;
 
@@ -49,8 +49,8 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
     public MMDPlayModule(PlayerAnimation plugin) {
         super(plugin);
 
-        Objects.requireNonNull(plugin.getCommand("playmmd")).setExecutor(this);
-        Objects.requireNonNull(plugin.getCommand("stopmmd")).setExecutor((s, c, l, a) -> {
+        Objects.requireNonNull(plugin.getCommand("mmdplay")).setExecutor(this);
+        Objects.requireNonNull(plugin.getCommand("mmdstop")).setExecutor((s, c, l, a) -> {
             player.setUpdateCallback(ms -> {});
             player.interrupt();
             player = null;
@@ -193,13 +193,13 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
                         double y = mat.m31;
                         double z = mat.m32;
 
-                        Pose hmd = state.hmd();
-                        Vector3 forward = new Vector3(0, 0, -1);
-                        Quaternionfc orientation = hmd.orientation();
-                        Quaternion q = new Quaternion(orientation.w(), orientation.x(), orientation.y(), orientation.z());
-                        Vector3 dir = q.multiply(forward);
-                        float yaw = (float) Math.toDegrees(Math.atan2(-dir.getX(), dir.getZ()));
-                        float pitch = (float) -Math.toDegrees(Math.asin(dir.getY() / dir.length()));
+                        Pose hmd = state.hmd;
+                        Quaternionfc orientation = hmd.orientation;
+                        Vector3f forward = new Vector3f(0, 0, -1);
+                        Quaternionf q = new Quaternionf(orientation.x(), orientation.y(), orientation.z(), orientation.w());
+                        Vector3f dir = q.transform(forward);
+                        float yaw = (float) Math.toDegrees(Math.atan2(-dir.x, dir.z));
+                        float pitch = (float) -Math.toDegrees(Math.asin(dir.y / dir.length()));
 
                         int idx = i * 3;
                         double deltaX = (x - lastPosition[idx]) / 5;

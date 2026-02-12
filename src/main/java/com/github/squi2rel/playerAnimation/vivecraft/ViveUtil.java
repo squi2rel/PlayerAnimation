@@ -4,13 +4,14 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.FriendlyByteBuf;
 import org.bukkit.Location;
-import org.vivecraft.VSE;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
+import org.vivecraft.ViveMain;
 import org.vivecraft.VivePlayer;
-import org.vivecraft.listeners.VivecraftNetworkListener;
-import org.vivecraft.spigot.network.FBTMode;
-import org.vivecraft.spigot.network.Pose;
-import org.vivecraft.spigot.network.VrPlayerState;
-import org.vivecraft.spigot.network.packet.PayloadIdentifier;
+import org.vivecraft.api.data.FBTMode;
+import org.vivecraft.data.Pose;
+import org.vivecraft.data.VrPlayerState;
+import org.vivecraft.network.packet.PayloadIdentifier;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -20,17 +21,18 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class ViveUtil {
-    public static final AtomicReference<List<VivePlayer>> ref = new AtomicReference<>(List.of());
+    public static final AtomicReference<List<VivePlayer>> VIVE_PLAYERS = new AtomicReference<>(List.of());
+    private static final ThreadLocal<ByteArrayOutputStream> STREAM_CACHE = ThreadLocal.withInitial(ByteArrayOutputStream::new);
 
     public static void update() {
-        ref.set(List.copyOf(VSE.vivePlayers.values()));
+        VIVE_PLAYERS.set(List.copyOf(ViveMain.VIVE_PLAYERS.values()));
     }
 
     public static byte[] disableVR(UUID uuid) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         DataOutputStream data = new DataOutputStream(output);
         try {
-            data.writeByte(VivecraftNetworkListener.PacketDiscriminators.IS_VR_ACTIVE.ordinal());
+            data.writeByte(PayloadIdentifier.IS_VR_ACTIVE.ordinal());
             data.writeByte(0);
             data.writeLong(uuid.getMostSignificantBits());
             data.writeLong(uuid.getLeastSignificantBits());
@@ -41,27 +43,31 @@ public class ViveUtil {
     }
 
     public static void sendToVivePlayers(byte[] payload) {
-        for (VivePlayer sendTo : ref.get()) {
+        for (VivePlayer sendTo : VIVE_PLAYERS.get()) {
             if (sendTo == null || sendTo.player == null || !sendTo.player.isOnline()) continue;
-            sendTo.player.sendPluginMessage(VSE.me, VSE.CHANNEL, payload);
+            sendTo.player.sendPluginMessage(ViveMain.INSTANCE, "vivecraft:data", payload);
         }
     }
 
     public static void sendToVivePlayersNear(byte[] payload, Location loc, double radius) {
-        for (VivePlayer sendTo : ref.get()) {
+        for (VivePlayer sendTo : VIVE_PLAYERS.get()) {
             if (sendTo == null || sendTo.player == null || !sendTo.player.isOnline()) continue;
             Location pos = sendTo.player.getLocation();
             if (loc.getWorld() != pos.getWorld() || loc.distanceSquared(pos) > radius * radius) continue;
-            sendTo.player.sendPluginMessage(VSE.me, VSE.CHANNEL, payload);
+            sendTo.player.sendPluginMessage(ViveMain.INSTANCE, "vivecraft:data", payload);
         }
     }
 
     public static VrPlayerState newState() {
         return new VrPlayerState(
-                false, Pose.create(), false, Pose.create(), false, Pose.create(),
-                FBTMode.WITH_JOINTS, Pose.create(),
-                Pose.create(), Pose.create(), Pose.create(), Pose.create(), Pose.create(), Pose.create()
+                false, newPos(), false, newPos(), false, newPos(),
+                FBTMode.WITH_JOINTS, newPos(),
+                newPos(), newPos(), newPos(), newPos(), newPos(), newPos()
         );
+    }
+
+    public static Pose newPos() {
+        return new Pose(new Vector3f(), new Quaternionf());
     }
 
     public static byte[] getPose(UUID target, VrPlayerState state) {
@@ -69,7 +75,14 @@ public class ViveUtil {
         FriendlyByteBuf buf = new FriendlyByteBuf(buffer);
         buf.writeByte(PayloadIdentifier.UBERPACKET.ordinal());
         buf.writeUUID(target);
-        state.serialize(buf);
+        ByteArrayOutputStream stream = STREAM_CACHE.get();
+        try {
+            state.serialize(new DataOutputStream(stream));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        buf.writeBytes(stream.toByteArray());
+        stream.reset();
         buf.writeFloat(1);
         buf.writeFloat(1);
         byte[] out = new byte[buffer.readableBytes()];

@@ -31,7 +31,7 @@ repositories {
 }
 
 dependencies {
-    implementation "org.spigotmc:spigot-api:1.21.4-R0.1-SNAPSHOT"
+    compileOnly "org.spigotmc:spigot-api:1.21.4-R0.1-SNAPSHOT"
 
     compileOnly "io.netty:netty-buffer:4.1.115.Final"
     compileOnly files("lib/minecraft-merged-a172fc6613-1.21.4-loom.mappings.1_21_4.layered+hash.2198-v2.jar")
@@ -40,7 +40,7 @@ dependencies {
     compileOnly "de.maxhenkel.voicechat:voicechat-api:2.5.27"
     compileOnly "net.dmulloy2:ProtocolLib:5.4.0"
     compileOnly "it.unimi.dsi:fastutil:8.5.15"
-    compileOnly files("lib/Vivecraft_Paper_Extensions.jar")
+    compileOnly files("lib/Vivecraft-Spigot-Extension-1.3.5-0.jar")
 }
 
 tasks {
