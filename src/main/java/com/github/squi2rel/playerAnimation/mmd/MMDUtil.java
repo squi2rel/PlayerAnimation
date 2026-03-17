@@ -14,6 +14,9 @@ import org.vivecraft.data.VrPlayerState;
 import java.lang.reflect.Field;
 
 public class MMDUtil {
+    public static final float MMD_UNITS_PER_VR_BLOCK = 5.0f;
+    public static final float MMD_UNITS_PER_BLOCK = 12.5f;
+
     public static void update(VrPlayerState state, MMDModelData data) {
         apply(data.head(), state.hmd);
         if (data.rightElbow() != null) apply(data.rightElbow(), state.rightElbow);
@@ -30,7 +33,7 @@ public class MMDUtil {
     public static void apply(PmdBone bone, Pose pose) {
         if (pose == null) throw new IllegalStateException();
         MmdMatrix mat = bone.m_matLocal;
-        ((Vector3f) pose.position).set(-mat.m30 / 5, mat.m31 / 5, mat.m32 / 5);
+        ((Vector3f) pose.position).set((float) -toVr(mat.m30), (float) toVr(mat.m31), (float) toVr(mat.m32));
         ((Quaternionf) pose.orientation).setFromUnnormalized(new Matrix3d(
                 mat.m00, -mat.m01, -mat.m02,
                 -mat.m10, mat.m11, mat.m12,
@@ -79,17 +82,19 @@ public class MMDUtil {
         ((Vector3f) pose.position).add(dx, dy, dz);
     }
 
-    public static Vector3f getCameraPosition(MMDCameraData.RawCameraFrame frame) {
-        // TODO wrong?
-        float rx = (float) Math.toRadians(frame.rotX);
-        float ry = (float) Math.toRadians(frame.rotY);
+    public static double toMc(double value) {
+        return value / MMD_UNITS_PER_BLOCK;
+    }
 
-        Vector3f forward = new Vector3f(
-                (float) (Math.cos(rx) * Math.sin(ry)),
-                (float) Math.sin(rx),
-                (float) (Math.cos(rx) * Math.cos(ry))
-        );
+    public static float toMc(float value) {
+        return value / MMD_UNITS_PER_BLOCK;
+    }
 
-        return new Vector3f(frame.targetX, frame.targetY, frame.targetZ).sub(forward.mul(frame.distance));
+    public static double toVr(double value) {
+        return value / MMD_UNITS_PER_VR_BLOCK;
+    }
+
+    public static float toVr(float value) {
+        return value / MMD_UNITS_PER_VR_BLOCK;
     }
 }

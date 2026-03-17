@@ -48,12 +48,14 @@ public class MMDLoader {
         if (pmdFiles.isEmpty() || vmdFiles.isEmpty()) throw new Exception("Missing files");
 
         MMDCameraData camera = null;
-        try (InputStream is = new FileInputStream(Objects.requireNonNull(cameraFile))) {
-            int l = MMDCameraReader.readCameraLength(is);
-            if (l != -1) {
-                PlayerAnimation.LOGGER.info("is camera file " + cameraFile);
-                camera = MMDCameraReader.readBody(is, l);
-                vmdFiles.remove(cameraFile);
+        if (cameraFile != null) {
+            try (InputStream is = new FileInputStream(cameraFile)) {
+                int l = MMDCameraReader.readCameraLength(is);
+                if (l != -1) {
+                    PlayerAnimation.LOGGER.info("is camera file " + cameraFile);
+                    camera = MMDCameraReader.readBody(is, l);
+                    vmdFiles.remove(cameraFile);
+                }
             }
         }
 

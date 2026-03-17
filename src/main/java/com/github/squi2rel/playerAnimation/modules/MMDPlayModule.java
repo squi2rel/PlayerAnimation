@@ -77,11 +77,25 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             sender.sendMessage("当前已经在播放了");
             return true;
         }
+        if (!(sender instanceof Player)) {
+            sender.sendMessage("只能由玩家使用");
+            return true;
+        }
+        if (args.length < 3) {
+            sender.sendMessage("用法: /mmdplay <folder> <degrees> [yOffset] <targets...>");
+            return true;
+        }
         targets.clear();
         filtered.clear();
         float degrees = Float.parseFloat(args[1]);
-        float scale = Float.parseFloat(args[2]);
-        for (int i = 3; i < args.length; i++) {
+        double yOffset = 0.0;
+        int targetStart = 2;
+        if (args.length >= 4 && isFloat(args[2])) {
+            yOffset = Double.parseDouble(args[2]);
+            targetStart = 3;
+        }
+        final double playbackYOffset = yOffset;
+        for (int i = targetStart; i < args.length; i++) {
             String name = args[i];
             try {
                 targets.add(UUID.fromString(name));
@@ -94,8 +108,13 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
                 targets.add(p.getUniqueId());
             }
         }
+        if (targets.isEmpty()) {
+            sender.sendMessage("没有可播放的目标玩家");
+            return true;
+        }
         filtered.addAll(targets);
         entityIds.clear();
+        Player senderPlayer = (Player) sender;
         for (UUID target : targets) {
             Entity e = Bukkit.getEntity(target);
             Player p = Bukkit.getPlayer(target);
@@ -106,7 +125,7 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             if (e == null) continue;
             entityIds.add(e.getEntityId());
         }
-        entityIds.add(((Player) sender).getEntityId());
+        entityIds.add(senderPlayer.getEntityId());
         VrPlayerState state = ViveUtil.newState();
         for (UUID target : targets) ViveUtil.sendToVivePlayers(ViveUtil.getPose(target, state));
         try {
@@ -114,7 +133,7 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             sender.sendMessage("加载了 %d 个模型".formatted(resources.models().length));
             List<MMDPlayer> players = new ArrayList<>();
             MMDModelData[] models = resources.models();
-            //MMDCameraData camera = resources.camera();
+            MMDCameraData camera = resources.camera();
             for (MMDModelData data : models) {
                 PmdBone global = MMDUtil.boneHack(data.pmd());
                 MMDUtil.rotateY(global.m_vec4Rotate, degrees);
@@ -126,15 +145,27 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             player = MMDThread.create(players);
             timeLength = (long) players.getFirst().getTimeLength();
 
-            //if (camera != null) filtered.add(((Player) sender).getUniqueId());
+            Entity entity = null;
+            for (UUID target : targets) {
+                entity = Bukkit.getEntity(target);
+                if (entity != null) break;
+            }
+            final Entity playbackEntity = entity;
+            Location cameraOrigin = playbackEntity != null
+                    ? playbackEntity.getLocation().clone()
+                    : senderPlayer.getLocation().clone();
+            double cameraEyeHeight = senderPlayer.getEyeHeight(true);
+            float rotationRad = (float) Math.toRadians(degrees);
+            Vector3f cameraEye = new Vector3f();
+            Vector3f cameraDir = new Vector3f();
+            if (camera != null) filtered.add(senderPlayer.getUniqueId());
 
             for (PacketAdapter listener : listeners) PacketUtil.protocolManager.addPacketListener(listener);
             AudioPlayerPlugin.setup();
             AudioPlayer audio;
-            Entity entity = Bukkit.getEntity(targets.getFirst());
             if (resources.audio() != null) {
                 VoicechatServerApi api = AudioPlayerPlugin.voicechatServerApi;
-                Location pos = ((Player) sender).getLocation();
+                Location pos = senderPlayer.getLocation();
                 LocationalAudioChannel c = api.createLocationalAudioChannel(UUID.randomUUID(), api.fromServerLevel(pos.getWorld()), api.createPosition(pos.getX(), pos.getY(), pos.getZ()));
                 Objects.requireNonNull(c).setDistance(64);
                 audio = AudioUtil.create(Objects.requireNonNull(c), resources.audio());
@@ -150,28 +181,27 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
                     progressBar.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(formatProgress(startTime, timeLength)));
                 }
 
-                /*if (camera != null) {
-                    Player p = (Player) sender;
-                    Vector3f pos = new Vector3f();
-                    Quaternionf rot = new Quaternionf();
-                    camera.getCameraData(ms, pos, rot);
-                    Vector3f rotEuler = new Vector3f();
-                    rot.getEulerAnglesXYZ(rotEuler);
-                    Location real = p.getLocation();
-                    double tx = real.getX() + pos.x / 5 / scale;
-                    double ty = real.getY() + pos.y / 5 - p.getEyeHeight(true);
-                    double tz = real.getZ() + pos.z / 5 / scale;
-                    PacketUtil.sendTo(PacketUtil.syncPos(tx, ty, tz, (float) Math.toDegrees(rotEuler.x), (float) Math.toDegrees(rotEuler.y)), p);
-                }*/
+                if (camera != null && senderPlayer.isOnline()) {
+                    camera.sample(ms, cameraEye, cameraDir);
+                    cameraEye.rotateY(rotationRad);
+                    cameraDir.rotateY(rotationRad);
+                    Vector3f mcCameraDir = new Vector3f(-cameraDir.x, cameraDir.y, -cameraDir.z);
+                    float yaw = directionToYaw(mcCameraDir);
+                    float pitch = directionToPitch(mcCameraDir);
+                    double tx = cameraOrigin.getX() - MMDUtil.toMc(cameraEye.x);
+                    double ty = cameraOrigin.getY() + MMDUtil.toMc(cameraEye.y) - cameraEyeHeight + playbackYOffset - 0.5;
+                    double tz = cameraOrigin.getZ() + MMDUtil.toMc(cameraEye.z);
+                    PacketUtil.sendTo(PacketUtil.syncPos(tx, ty, tz, yaw, pitch), senderPlayer);
+                }
 
-                if (entity == null) {
+                if (playbackEntity == null) {
                     for (int i = 0, l = targets.size(); i < l; i++) {
                         UUID target = targets.get(i);
                         MMDUtil.update(state, models[Math.min(i, models.length - 1)]);
                         ViveUtil.sendToVivePlayers(ViveUtil.getPose(target, state));
                     }
                 } else {
-                    int range = entity.getWorld().getViewDistance() * 16;
+                    int range = playbackEntity.getWorld().getViewDistance() * 16;
                     double min = -8, max = 7.999755859375;
 
                     boolean sync = false;
@@ -195,39 +225,38 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
 
                         Pose hmd = state.hmd;
                         Quaternionfc orientation = hmd.orientation;
-                        Vector3f forward = new Vector3f(0, 0, -1);
-                        Quaternionf q = new Quaternionf(orientation.x(), orientation.y(), orientation.z(), orientation.w());
-                        Vector3f dir = q.transform(forward);
-                        float yaw = (float) Math.toDegrees(Math.atan2(-dir.x, dir.z));
-                        float pitch = (float) -Math.toDegrees(Math.asin(dir.y / dir.length()));
+                        Vector3f dir = new Quaternionf(orientation.x(), orientation.y(), orientation.z(), orientation.w())
+                                .transform(new Vector3f(0, 0, -1));
+                        float yaw = directionToYaw(dir);
+                        float pitch = directionToPitch(dir);
 
                         int idx = i * 3;
-                        double deltaX = (x - lastPosition[idx]) / 5;
-                        double deltaY = (y - lastPosition[idx + 1]) / 5;
-                        double deltaZ = (z - lastPosition[idx + 2]) / 5;
+                        double deltaX = MMDUtil.toMc(x - lastPosition[idx]);
+                        double deltaY = MMDUtil.toMc(y - lastPosition[idx + 1]);
+                        double deltaZ = MMDUtil.toMc(z - lastPosition[idx + 2]);
                         lastPosition[idx] = x;
                         lastPosition[idx + 1] = y;
                         lastPosition[idx + 2] = z;
-                        double eye = ((LivingEntity) entity).getEyeHeight();
-                        MMDUtil.offset(state, (float) -(x / 5), (float) -(y / 5 - eye), (float) -(z / 5));
+                        double eye = ((LivingEntity) e).getEyeHeight();
+                        MMDUtil.offset(state, (float) -MMDUtil.toVr(x), (float) (-MMDUtil.toVr(y) + eye), (float) -MMDUtil.toVr(z));
 
                         if (e instanceof Player p && Bukkit.getPlayer(p.getUniqueId()) != null) {
                             p.setFlying(true);
                             Location real = e.getLocation();
-                            double tx = real.getX() + x / 5 / scale;
-                            double ty = real.getY() + y / 5 - eye;
-                            double tz = real.getZ() + z / 5 / scale;
+                            double tx = real.getX() + MMDUtil.toMc(x);
+                            double ty = real.getY() + MMDUtil.toMc(y) - eye + playbackYOffset;
+                            double tz = real.getZ() + MMDUtil.toMc(z);
                             PacketUtil.sendTo(PacketUtil.syncPos(tx, ty, tz, yaw, pitch), p);
                         }
                         if (sync || deltaX < min || deltaY < min || deltaZ < min || deltaX > max || deltaY > max || deltaZ > max) {
                             Location real = e.getLocation();
-                            double tx = real.getX() + x / 5 / scale;
-                            double ty = real.getY() + y / 5 - eye;
-                            double tz = real.getZ() + z / 5 / scale;
+                            double tx = real.getX() + MMDUtil.toMc(x);
+                            double ty = real.getY() + MMDUtil.toMc(y) - eye + playbackYOffset;
+                            double tz = real.getZ() + MMDUtil.toMc(z);
                             PacketUtil.forceSend(PacketUtil.tp(e, tx, ty, tz, yaw, pitch), real, range);
                             PacketUtil.forceSend(PacketUtil.setHeadYaw(e, yaw), real, range);
                         } else {
-                            PacketUtil.forceSend(PacketUtil.move(e, deltaX / scale, deltaY, deltaZ / scale, yaw, pitch), e.getLocation(), range);
+                            PacketUtil.forceSend(PacketUtil.move(e, deltaX, deltaY, deltaZ, yaw, pitch), e.getLocation(), range);
                             PacketUtil.forceSend(PacketUtil.setHeadYaw(e, yaw), e.getLocation(), range);
                         }
                         ViveUtil.sendToVivePlayersNear(ViveUtil.getPose(target, state), e.getLocation(), range);
@@ -237,7 +266,22 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             player.setStopCallback(() -> {
                 if (audio != null) audio.stopPlaying();
                 for (PacketAdapter listener : listeners) PacketUtil.protocolManager.removePacketListener(listener);
-                int maxDistance = Objects.requireNonNull(entity).getWorld().getViewDistance() * 16;
+                if (camera != null) {
+                    filtered.remove(senderPlayer.getUniqueId());
+                    if (senderPlayer.isOnline()) {
+                        PacketUtil.sendTo(PacketUtil.syncPos(
+                                cameraOrigin.getX(),
+                                cameraOrigin.getY(),
+                                cameraOrigin.getZ(),
+                                cameraOrigin.getYaw(),
+                                cameraOrigin.getPitch()
+                        ), senderPlayer);
+                    }
+                }
+                int maxDistance = senderPlayer.getWorld().getViewDistance() * 16;
+                if (playbackEntity != null) {
+                    maxDistance = playbackEntity.getWorld().getViewDistance() * 16;
+                }
                 for (UUID target : targets) {
                     Entity e = Bukkit.getEntity(target);
                     if (e == null) continue;
@@ -255,7 +299,7 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
                 player = null;
             });
 
-            progressBar = (Player) sender;
+            progressBar = senderPlayer;
 
             player.start();
             if (audio != null) audio.startPlaying();
@@ -280,6 +324,26 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
         long minutes = totalSeconds / 60;
         long seconds = totalSeconds % 60;
         return String.format("%02d:%02d", minutes, seconds);
+    }
+
+    private static float directionToYaw(Vector3f dir) {
+        return (float) Math.toDegrees(Math.atan2(-dir.x, dir.z));
+    }
+
+    private static float directionToPitch(Vector3f dir) {
+        double length = dir.length();
+        if (length == 0.0) return 0.0f;
+        double y = Math.max(-1.0, Math.min(1.0, dir.y / length));
+        return (float) -Math.toDegrees(Math.asin(y));
+    }
+
+    private static boolean isFloat(String value) {
+        try {
+            Float.parseFloat(value);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private class FilterPacketAdapter extends PacketAdapter {
