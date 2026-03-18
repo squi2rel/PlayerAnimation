@@ -4,9 +4,13 @@ import jp.nyatla.nymmd.MmdException;
 
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.concurrent.locks.LockSupport;
 
 public class MMDThread extends Thread {
-    public int targetFps = 30;
+    private static final long PARK_MARGIN_NS = 2_000_000L;
+    private static final long SPIN_MARGIN_NS = 100_000L;
+
+    public int targetFps = 60;
 
     public final MMDPlayer[] players;
     public Consumer<Float> updateCallback;
@@ -29,32 +33,47 @@ public class MMDThread extends Thread {
         float timeLength = players[0].getTimeLength();
         long targetFrameTimeNs = 1_000_000_000 / targetFps;
         long startTime = System.nanoTime();
+        long nextFrameTimeNs = startTime;
 
         try {
             for (MMDPlayer player : players) player.updateMotion(0);
             while (!Thread.currentThread().isInterrupted()) {
-                long frameStart = System.nanoTime();
+                nextFrameTimeNs += targetFrameTimeNs;
+                waitUntil(nextFrameTimeNs);
+                long frameTime = System.nanoTime();
 
-                float elapsedMs = (frameStart - startTime) / 1_000_000f;
+                float elapsedMs = (frameTime - startTime) / 1_000_000f;
                 if (elapsedMs >= timeLength) break;
                 for (MMDPlayer player : players) player.updateMotion(elapsedMs);
                 updateCallback.accept(elapsedMs);
 
-                long frameEnd = System.nanoTime();
-                long frameDuration = frameEnd - frameStart;
-                long sleepTimeNs = targetFrameTimeNs - frameDuration;
-                if (sleepTimeNs > 0) {
-                    try {
-                        Thread.sleep(sleepTimeNs / 1_000_000, (int) (sleepTimeNs % 1_000_000));
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
+                long now = System.nanoTime();
+                if (now - nextFrameTimeNs > targetFrameTimeNs) {
+                    nextFrameTimeNs = now;
                 }
             }
         } catch (MmdException e) {
             throw new RuntimeException(e);
         } finally {
             stopCallback.run();
+        }
+    }
+
+    private static void waitUntil(long deadlineNs) {
+        while (!Thread.currentThread().isInterrupted()) {
+            long remaining = deadlineNs - System.nanoTime();
+            if (remaining <= 0) {
+                return;
+            }
+            if (remaining > PARK_MARGIN_NS) {
+                LockSupport.parkNanos(remaining - PARK_MARGIN_NS);
+                continue;
+            }
+            if (remaining > SPIN_MARGIN_NS) {
+                Thread.yield();
+                continue;
+            }
+            Thread.onSpinWait();
         }
     }
 
