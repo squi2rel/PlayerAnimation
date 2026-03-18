@@ -23,6 +23,7 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -34,8 +35,11 @@ import org.vivecraft.data.Pose;
 import org.vivecraft.data.VrPlayerState;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MMDPlayModule extends BaseModule implements CommandExecutor {
+    private static final AtomicInteger FAKE_ENTITY_IDS = new AtomicInteger(2_000_000_000);
+
     public List<UUID> targets = new ArrayList<>();
     public List<UUID> filtered = new ArrayList<>();
     public List<Integer> entityIds = new IntArrayList();
@@ -115,6 +119,7 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
         filtered.addAll(targets);
         entityIds.clear();
         Player senderPlayer = (Player) sender;
+        List<AudienceState> audience = captureAudienceStates(collectAudience(senderPlayer, targets));
         for (UUID target : targets) {
             Entity e = Bukkit.getEntity(target);
             Player p = Bukkit.getPlayer(target);
@@ -128,6 +133,7 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
         entityIds.add(senderPlayer.getEntityId());
         VrPlayerState state = ViveUtil.newState();
         for (UUID target : targets) ViveUtil.sendToVivePlayers(ViveUtil.getPose(target, state));
+        FakeCameraState activeCameraState = null;
         try {
             MMDResource resources = MMDLoader.load(args[0]);
             sender.sendMessage("加载了 %d 个模型".formatted(resources.models().length));
@@ -154,11 +160,31 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             Location cameraOrigin = playbackEntity != null
                     ? playbackEntity.getLocation().clone()
                     : senderPlayer.getLocation().clone();
-            double cameraEyeHeight = senderPlayer.getEyeHeight(true);
             float rotationRad = (float) Math.toRadians(degrees);
             Vector3f cameraEye = new Vector3f();
             Vector3f cameraDir = new Vector3f();
-            if (camera != null) filtered.add(senderPlayer.getUniqueId());
+            FakeCameraState fakeCamera = null;
+            if (camera != null) {
+                for (AudienceState viewer : audience) {
+                    filtered.add(viewer.uuid());
+                }
+            }
+            if (camera != null) {
+                fakeCamera = new FakeCameraState(
+                        FAKE_ENTITY_IDS.getAndIncrement(),
+                        UUID.randomUUID()
+                );
+                CameraPose pose = sampleCameraPose(camera, cameraOrigin, playbackYOffset, rotationRad, cameraEye, cameraDir);
+                for (AudienceState viewer : audience) {
+                    Player audiencePlayer = viewer.player();
+                    if (!audiencePlayer.isOnline()) continue;
+                    PacketUtil.sendTo(PacketUtil.spawnEntity(fakeCamera.entityId, fakeCamera.uuid, EntityType.ITEM_DISPLAY, pose.x, pose.y, pose.z, pose.yaw, pose.pitch), audiencePlayer);
+                    PacketUtil.sendTo(PacketUtil.tp(fakeCamera.entityId, pose.x, pose.y, pose.z, pose.yaw, pose.pitch), audiencePlayer);
+                    PacketUtil.sendTo(PacketUtil.camera(fakeCamera.entityId), audiencePlayer);
+                }
+            }
+            final FakeCameraState cameraState = fakeCamera;
+            activeCameraState = cameraState;
 
             for (PacketAdapter listener : listeners) PacketUtil.protocolManager.addPacketListener(listener);
             AudioPlayerPlugin.setup();
@@ -181,17 +207,13 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
                     progressBar.spigot().sendMessage(ChatMessageType.ACTION_BAR, new TextComponent(formatProgress(startTime, timeLength)));
                 }
 
-                if (camera != null && senderPlayer.isOnline()) {
-                    camera.sample(ms, cameraEye, cameraDir);
-                    cameraEye.rotateY(rotationRad);
-                    cameraDir.rotateY(rotationRad);
-                    Vector3f mcCameraDir = new Vector3f(-cameraDir.x, cameraDir.y, -cameraDir.z);
-                    float yaw = directionToYaw(mcCameraDir);
-                    float pitch = directionToPitch(mcCameraDir);
-                    double tx = cameraOrigin.getX() - MMDUtil.toMc(cameraEye.x);
-                    double ty = cameraOrigin.getY() + MMDUtil.toMc(cameraEye.y) - cameraEyeHeight + playbackYOffset - 0.5;
-                    double tz = cameraOrigin.getZ() + MMDUtil.toMc(cameraEye.z);
-                    PacketUtil.sendTo(PacketUtil.syncPos(tx, ty, tz, yaw, pitch), senderPlayer);
+                if (cameraState != null && camera != null) {
+                    CameraPose pose = sampleCameraPose(camera, ms, cameraOrigin, playbackYOffset, rotationRad, cameraEye, cameraDir);
+                    for (AudienceState viewer : audience) {
+                        Player audiencePlayer = viewer.player();
+                        if (!audiencePlayer.isOnline()) continue;
+                        PacketUtil.sendTo(PacketUtil.tp(cameraState.entityId, pose.x, pose.y, pose.z, pose.yaw, pose.pitch), audiencePlayer);
+                    }
                 }
 
                 if (playbackEntity == null) {
@@ -266,17 +288,8 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             player.setStopCallback(() -> {
                 if (audio != null) audio.stopPlaying();
                 for (PacketAdapter listener : listeners) PacketUtil.protocolManager.removePacketListener(listener);
-                if (camera != null) {
-                    filtered.remove(senderPlayer.getUniqueId());
-                    if (senderPlayer.isOnline()) {
-                        PacketUtil.sendTo(PacketUtil.syncPos(
-                                cameraOrigin.getX(),
-                                cameraOrigin.getY(),
-                                cameraOrigin.getZ(),
-                                cameraOrigin.getYaw(),
-                                cameraOrigin.getPitch()
-                        ), senderPlayer);
-                    }
+                if (cameraState != null) {
+                    restoreAudienceCamera(audience, cameraState);
                 }
                 int maxDistance = senderPlayer.getWorld().getViewDistance() * 16;
                 if (playbackEntity != null) {
@@ -306,6 +319,11 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
             startTime = System.currentTimeMillis();
             sender.sendMessage("开始播放");
         } catch (Exception e) {
+            if (activeCameraState != null) {
+                restoreAudienceCamera(audience, activeCameraState);
+            } else {
+                for (AudienceState viewer : audience) filtered.remove(viewer.uuid());
+            }
             sender.sendMessage(e.toString());
         }
         return true;
@@ -344,6 +362,78 @@ public class MMDPlayModule extends BaseModule implements CommandExecutor {
         } catch (NumberFormatException e) {
             return false;
         }
+    }
+
+    private static CameraPose sampleCameraPose(MMDCameraData camera, Location origin, double yOffset, float rotationRad, Vector3f eye, Vector3f dir) {
+        return sampleCameraPose(camera, 0, origin, yOffset, rotationRad, eye, dir);
+    }
+
+    private static CameraPose sampleCameraPose(MMDCameraData camera, float ms, Location origin, double yOffset, float rotationRad, Vector3f eye, Vector3f dir) {
+        camera.sample(ms, eye, dir);
+        eye.rotateY(rotationRad);
+        dir.rotateY(rotationRad);
+        Vector3f mcDir = new Vector3f(-dir.x, dir.y, -dir.z);
+        float yaw = directionToYaw(mcDir);
+        float pitch = directionToPitch(mcDir);
+        double x = origin.getX() - MMDUtil.toMc(eye.x);
+        double y = origin.getY() + MMDUtil.toMc(eye.y) + yOffset - 0.5;
+        double z = origin.getZ() + MMDUtil.toMc(eye.z);
+        return new CameraPose(x, y, z, yaw, pitch);
+    }
+
+    private static List<Player> collectAudience(Player senderPlayer, Collection<UUID> targets) {
+        Set<UUID> targetSet = new HashSet<>(targets);
+        LinkedHashMap<UUID, Player> audience = new LinkedHashMap<>();
+        if (!targetSet.contains(senderPlayer.getUniqueId())) {
+            audience.put(senderPlayer.getUniqueId(), senderPlayer);
+        }
+        for (Entity entity : senderPlayer.getNearbyEntities(32, 32, 32)) {
+            if (!(entity instanceof Player player)) continue;
+            if (targetSet.contains(player.getUniqueId())) continue;
+            audience.put(player.getUniqueId(), player);
+        }
+        return new ArrayList<>(audience.values());
+    }
+
+    private List<AudienceState> captureAudienceStates(Collection<Player> audience) {
+        List<AudienceState> states = new ArrayList<>(audience.size());
+        for (Player player : audience) {
+            states.add(new AudienceState(player.getUniqueId(), player, player.getLocation().clone()));
+        }
+        return states;
+    }
+
+    private void restoreAudienceCamera(Collection<AudienceState> audience, FakeCameraState cameraState) {
+        for (AudienceState viewer : audience) {
+            filtered.remove(viewer.uuid());
+            Player audiencePlayer = viewer.player();
+            if (!audiencePlayer.isOnline()) continue;
+            PacketUtil.sendTo(PacketUtil.camera(audiencePlayer.getEntityId()), audiencePlayer);
+            PacketUtil.sendTo(PacketUtil.destroyEntity(cameraState.entityId), audiencePlayer);
+            PacketUtil.sendTo(PacketUtil.syncPos(
+                    viewer.restore().getX(),
+                    viewer.restore().getY(),
+                    viewer.restore().getZ(),
+                    viewer.restore().getYaw(),
+                    viewer.restore().getPitch()
+            ), audiencePlayer);
+        }
+    }
+
+    private static final class FakeCameraState {
+        private final int entityId;
+        private final UUID uuid;
+
+        private FakeCameraState(int entityId, UUID uuid) {
+            this.entityId = entityId;
+            this.uuid = uuid;
+        }
+    }
+
+    private record CameraPose(double x, double y, double z, float yaw, float pitch) {
+    }
+
+    private record AudienceState(UUID uuid, Player player, Location restore) {
     }
 
     private class FilterPacketAdapter extends PacketAdapter {
